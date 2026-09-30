@@ -2,7 +2,9 @@ package providers
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 )
@@ -11,6 +13,12 @@ import (
 type FallbackChain struct {
 	cooldown *CooldownTracker
 	rl       *RateLimiterRegistry
+	// now, sleep, and randN are injectable so a 429 wait can be tested
+	// without sleeping. Nil uses the real clock.
+	now   func() time.Time
+	sleep func(context.Context, time.Duration) error
+	randN func(int) int
+	gate  *RateLimitGate
 }
 
 // FallbackCandidate represents one model/provider to try.
@@ -61,7 +69,14 @@ type FallbackAttempt struct {
 // NewFallbackChain creates a new fallback chain with the given cooldown tracker
 // and rate limiter registry.
 func NewFallbackChain(cooldown *CooldownTracker, rl *RateLimiterRegistry) *FallbackChain {
-	return &FallbackChain{cooldown: cooldown, rl: rl}
+	return &FallbackChain{
+		cooldown: cooldown,
+		rl:       rl,
+		now:      time.Now,
+		sleep:    sleepRateLimit,
+		randN:    defaultRandN,
+		gate:     processRateLimitGate,
+	}
 }
 
 // Acquire enforces the local rate limit for a candidate identity. It blocks
@@ -218,10 +233,12 @@ func (fc *FallbackChain) ExecuteCandidate(
 			}
 		}
 
-		// Execute the run function.
-		start := time.Now()
-		resp, err := run(ctx, candidate)
-		elapsed := time.Since(start)
+		// A 429 waits for the advertised reset plus a cushion and retries
+		// this candidate. Walking the next free model on the same account
+		// would just spend more of the shared quota.
+		start := fc.clockNow()
+		resp, err := fc.callRespectingRateLimit(ctx, candidate, run)
+		elapsed := fc.clockNow().Sub(start)
 
 		if err == nil {
 			// Success.
@@ -242,6 +259,25 @@ func (fc *FallbackChain) ExecuteCandidate(
 				Duration: elapsed,
 			})
 			return nil, context.Canceled
+		}
+
+		// Platform rate limit already waited and retried this candidate.
+		// Do not mark a long cooldown and do not try the next model:
+		// free-model caps are per account, so the next model just 429s too.
+		var exhausted *RateLimitExhausted
+		if errors.As(err, &exhausted) {
+			reason := FailoverRateLimit
+			if failErr := ClassifyError(err, candidate.Provider, candidate.Model); failErr != nil {
+				reason = failErr.Reason
+			}
+			result.Attempts = append(result.Attempts, FallbackAttempt{
+				Provider: candidate.Provider,
+				Model:    candidate.Model,
+				Error:    err,
+				Reason:   reason,
+				Duration: elapsed,
+			})
+			return nil, err
 		}
 
 		// Classify the error.
@@ -289,6 +325,76 @@ func (fc *FallbackChain) ExecuteCandidate(
 
 	// All candidates were skipped (all in cooldown).
 	return nil, &FallbackExhaustedError{Attempts: result.Attempts}
+}
+
+func (fc *FallbackChain) clockNow() time.Time {
+	if fc != nil && fc.now != nil {
+		return fc.now()
+	}
+	return time.Now()
+}
+
+func (fc *FallbackChain) sleepFn() func(context.Context, time.Duration) error {
+	if fc != nil && fc.sleep != nil {
+		return fc.sleep
+	}
+	return sleepRateLimit
+}
+
+func (fc *FallbackChain) randFn() func(int) int {
+	if fc != nil && fc.randN != nil {
+		return fc.randN
+	}
+	return defaultRandN
+}
+
+func (fc *FallbackChain) gateFn() *RateLimitGate {
+	if fc != nil && fc.gate != nil {
+		return fc.gate
+	}
+	return processRateLimitGate
+}
+
+// callRespectingRateLimit retries a candidate when the provider returns
+// HTTP 429. The wait is the header reset (or 60s) plus 30s and 0-20s
+// of jitter. Errors that are not an HTTP 429 keep the old fallback path.
+func (fc *FallbackChain) callRespectingRateLimit(
+	ctx context.Context,
+	candidate FallbackCandidate,
+	run func(ctx context.Context, candidate FallbackCandidate) (*LLMResponse, error),
+) (*LLMResponse, error) {
+	holds := 0
+	for {
+		if err := fc.gateFn().Wait(ctx, fc.clockNow, fc.sleepFn()); err != nil {
+			return nil, err
+		}
+		resp, err := run(ctx, candidate)
+		if err == nil || ctx.Err() == context.Canceled {
+			return resp, err
+		}
+		snap, ok := rateLimitSnapshot(err)
+		if !ok {
+			return nil, err
+		}
+		now := fc.clockNow()
+		delay := snap.Delay(now, fc.randFn())
+		fc.gateFn().Push(now.Add(delay), snap)
+		holds++
+		log.Printf(
+			"picoclaw: HTTP 429 from %s/%s, waiting %s before retry (%d/%d) limit=%q remaining=%q reset=%q retry_after=%q",
+			candidate.Provider, candidate.Model, delay.Round(time.Second),
+			holds, snap.maxHolds(), snap.Limit, snap.Remaining, snap.Reset, snap.RetryAfter,
+		)
+		if holds > snap.maxHolds() {
+			if snap.Platform {
+				return nil, &RateLimitExhausted{Err: err, Snapshot: snap}
+			}
+			return nil, err
+		}
+		if sleepErr := fc.sleepFn()(ctx, delay); sleepErr != nil {
+			return nil, sleepErr
+		}
+	}
 }
 
 // ExecuteImage runs the fallback chain for image/vision requests.
