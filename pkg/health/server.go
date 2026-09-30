@@ -8,9 +8,12 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/sipeed/picoclaw/pkg/config"
 )
 
 type Server struct {
@@ -23,6 +26,7 @@ type Server struct {
 	reloadFunc func() error
 	authToken  string // optional bearer token for protected endpoints
 	protected  map[string]http.Handler
+	beaconFile string // beacon.json; empty means beside config.json
 }
 
 type Check struct {
@@ -52,6 +56,7 @@ func NewServer(host string, port int, token string) *Server {
 
 	mux.HandleFunc("/health", s.healthHandler)
 	mux.HandleFunc("/ready", s.readyHandler)
+	mux.HandleFunc("/beacon", s.beaconHandler)
 	mux.HandleFunc("/reload", s.reloadHandler)
 
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
@@ -272,11 +277,12 @@ type HandlerMux interface {
 	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
 }
 
-// RegisterOnMux registers /health, /ready and /reload handlers onto the given mux.
+// RegisterOnMux registers /health, /ready, /beacon, and /reload onto the given mux.
 // This allows the health endpoints to be served by a shared HTTP server.
 func (s *Server) RegisterOnMux(mux HandlerMux) {
 	mux.HandleFunc("/health", s.healthHandler)
 	mux.HandleFunc("/ready", s.readyHandler)
+	mux.HandleFunc("/beacon", s.beaconHandler)
 	mux.HandleFunc("/reload", s.reloadHandler)
 	s.mu.RLock()
 	protected := make(map[string]http.Handler, len(s.protected))
@@ -285,6 +291,27 @@ func (s *Server) RegisterOnMux(mux HandlerMux) {
 	for pattern, handler := range protected {
 		mux.Handle(pattern, handler)
 	}
+}
+
+// SetBeaconFile overrides the beacon.json path. Tests and unusual layouts use this.
+// An empty path restores the default: beacon.json beside config.json.
+func (s *Server) SetBeaconFile(path string) {
+	s.mu.Lock()
+	s.beaconFile = path
+	s.mu.Unlock()
+}
+
+func (s *Server) beaconPath() string {
+	s.mu.RLock()
+	path := s.beaconFile
+	s.mu.RUnlock()
+	if path != "" {
+		return path
+	}
+	if cfg := os.Getenv(config.EnvConfig); cfg != "" {
+		return filepath.Join(filepath.Dir(cfg), "beacon.json")
+	}
+	return filepath.Join(config.GetHome(), "beacon.json")
 }
 
 func statusString(ok bool) string {
