@@ -332,6 +332,39 @@ func (p *Pipeline) CallLLM(
 	for retry := 0; retry <= maxRetries; retry++ {
 		exec.response, err = callLLM(exec.callMessages, exec.providerToolDefs)
 		if err == nil {
+			// Empty successful completions (common on openrouter/free) share the
+			// same retry budget/backoff as transient provider errors.
+			if llmResponseHasPayload(exec.response) {
+				break
+			}
+			if retry < maxRetries {
+				backoff := time.Duration(retry+1) * time.Duration(backoffSecs) * time.Second
+				al.emitEvent(
+					runtimeevents.KindAgentLLMRetry,
+					ts.eventMeta("runTurn", "turn.llm.retry"),
+					LLMRetryPayload{
+						Attempt:    retry + 1,
+						MaxRetries: maxRetries,
+						Reason:     "empty_completion",
+						Error:      "empty content and no tool_calls",
+						Backoff:    backoff,
+					},
+				)
+				logger.WarnCF("agent", "Empty LLM completion, retrying after backoff", map[string]any{
+					"retry":   retry,
+					"backoff": backoff.String(),
+					"model":   exec.llmModel,
+				})
+				if sleepErr := sleepWithContext(turnCtx, backoff); sleepErr != nil {
+					if ts.hardAbortRequested() {
+						_ = ts.requestHardAbort()
+						return ControlBreak, nil
+					}
+					err = sleepErr
+					break
+				}
+				continue
+			}
 			break
 		}
 		if ts.hardAbortRequested() && errors.Is(err, context.Canceled) {
@@ -868,6 +901,27 @@ func providerForFallbackCandidate(
 		return nil, fmt.Errorf("fallback model %q has no active provider", candidate.Model)
 	}
 	return activeProvider, nil
+}
+
+// llmResponseHasPayload reports whether an LLM response has usable content,
+// tool calls, or reasoning that can be promoted to a user-visible answer.
+func llmResponseHasPayload(resp *providers.LLMResponse) bool {
+	if resp == nil {
+		return false
+	}
+	if len(resp.ToolCalls) > 0 {
+		return true
+	}
+	if strings.TrimSpace(resp.Content) != "" {
+		return true
+	}
+	if strings.TrimSpace(resp.ReasoningContent) != "" {
+		return true
+	}
+	if strings.TrimSpace(resp.Reasoning) != "" {
+		return true
+	}
+	return false
 }
 
 func transientLLMRetryReason(err error) (string, bool) {
