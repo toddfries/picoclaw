@@ -78,6 +78,15 @@ type AgentLoop struct {
 
 	turnSeq atomic.Uint64
 
+	// Crew presence on the bus. Not a model turn and not a chat line.
+	// liveTurns counts real runTurn calls; heartbeat is excluded.
+	activityMu      sync.Mutex
+	activitySendMu  sync.Mutex
+	liveTurns       int
+	activityStop    chan struct{}
+	activityEvery   time.Duration
+	activityPublish func(string)
+
 	// activeReqMu/activeReqCond/activeReqCount replace sync.WaitGroup to
 	// avoid the "WaitGroup is reused before previous Wait has returned" panic
 	// that occurs when Add(1) races with a goroutine-launched Wait().

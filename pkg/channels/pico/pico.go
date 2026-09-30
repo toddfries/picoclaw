@@ -961,6 +961,38 @@ func (c *PicoChannel) broadcast(chatID string, msg PicoMessage) error {
 	return c.broadcastToSession(chatID, msg)
 }
 
+// connectionSnapshot returns every live websocket, across sessions.
+func (c *PicoChannel) connectionSnapshot() []*picoConn {
+	c.connsMu.RLock()
+	defer c.connsMu.RUnlock()
+
+	conns := make([]*picoConn, 0, len(c.connections))
+	for _, pc := range c.connections {
+		conns = append(conns, pc)
+	}
+	return conns
+}
+
+// BroadcastActivity tells every Pico client this gateway is thinking or idle.
+// It does not touch a session and does not start a model turn.
+func (c *PicoChannel) BroadcastActivity(state string) {
+	if c == nil {
+		return
+	}
+	msg, ok := activityMessage(state)
+	if !ok {
+		return
+	}
+	for _, pc := range c.connectionSnapshot() {
+		if err := pc.writeJSON(msg); err != nil {
+			logger.DebugCF("pico", "Activity write failed", map[string]any{
+				"conn_id": pc.id,
+				"error":   err.Error(),
+			})
+		}
+	}
+}
+
 // broadcastToSession sends a message to all connections with a matching session.
 func (c *PicoChannel) broadcastToSession(chatID string, msg PicoMessage) error {
 	// chatID format: "pico:<sessionID>"
@@ -1189,6 +1221,9 @@ func (c *PicoChannel) handleMessage(pc *picoConn, msg PicoMessage) {
 
 	case TypeMediaSend:
 		c.handleMessageSend(pc, msg)
+
+	case TypeActivity:
+		// Server → client only. An echo must not start a model turn.
 
 	default:
 		errMsg := newError("unknown_type", fmt.Sprintf("unknown message type: %s", msg.Type))
