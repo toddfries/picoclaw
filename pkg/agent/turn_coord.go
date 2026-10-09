@@ -123,7 +123,22 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 	mediaOpts := mediaResolveOptionsFor(pipeline.Cfg)
 	finalContent := exec.finalContent
 
-	for ts.currentIteration() < ts.agent.MaxIterations || len(exec.pendingMessages) > 0 || func() bool {
+	savedCap := ts.agent.MaxIterations
+	if savedCap <= 0 {
+		savedCap = 20
+	}
+	stepCap := savedCap
+	if granted, ok := toolBudgetGrant(ts.userMessage, savedCap); ok {
+		stepCap = granted
+		logger.InfoCF("agent", "Tool budget grant",
+			map[string]any{
+				"agent_id":  ts.agent.ID,
+				"saved_cap": savedCap,
+				"turn_cap":  stepCap,
+			})
+	}
+
+	for ts.currentIteration() < stepCap || len(exec.pendingMessages) > 0 || func() bool {
 		graceful, _ := ts.gracefulInterruptRequested()
 		return graceful
 	}() {
@@ -311,8 +326,8 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 	}
 
 	if finalContent == "" {
-		if ts.currentIteration() >= ts.agent.MaxIterations && ts.agent.MaxIterations > 0 {
-			finalContent = toolLimitResponse
+		if ts.currentIteration() >= stepCap && stepCap > 0 {
+			finalContent = formatToolLimitStop(messages, ts.currentIteration(), savedCap, stepCap)
 		} else {
 			finalContent = emptyResponseFallback(ts)
 		}
