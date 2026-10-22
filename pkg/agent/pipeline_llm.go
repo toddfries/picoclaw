@@ -874,6 +874,12 @@ func transientLLMRetryReason(err error) (string, bool) {
 	if err == nil {
 		return "", false
 	}
+	// The fallback chain already waited out Retry-After / X-RateLimit-Reset.
+	// A 2s retry here would spend another request in the same window.
+	var exhausted *providers.RateLimitExhausted
+	if errors.As(err, &exhausted) {
+		return "", false
+	}
 
 	if failErr := providers.ClassifyError(err, "", ""); failErr != nil {
 		switch failErr.Reason {

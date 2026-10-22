@@ -461,13 +461,19 @@ func DecodeToolCallArguments(raw json.RawMessage, name string) map[string]any {
 
 // HTTPError captures structured details for non-OK provider HTTP responses.
 // Error preserves the previous user/log-facing text format for compatibility.
+// Body and Headers keep rate-limit information the log line used to truncate away.
+// APIError is the same type so the rate-limit waiter can type-assert either name.
 type HTTPError struct {
 	StatusCode  int
 	BodyPreview string
+	Body        []byte
+	Headers     map[string]string
 	ContentType string
 	APIBase     string
 	IsHTML      bool
 }
+
+type APIError = HTTPError
 
 func (e *HTTPError) Error() string {
 	if e == nil {
@@ -492,7 +498,7 @@ func (e *HTTPError) Error() string {
 // HandleErrorResponse reads a non-200 response body and returns an appropriate error.
 func HandleErrorResponse(resp *http.Response, apiBase string) error {
 	contentType := resp.Header.Get("Content-Type")
-	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 256))
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 8192))
 	if readErr != nil {
 		return fmt.Errorf("failed to read response: %w", readErr)
 	}
@@ -502,6 +508,8 @@ func HandleErrorResponse(resp *http.Response, apiBase string) error {
 	return &HTTPError{
 		StatusCode:  resp.StatusCode,
 		BodyPreview: ResponsePreview(body, 128),
+		Body:        append([]byte(nil), body...),
+		Headers:     RateLimitHeaders(resp.Header, body),
 		ContentType: contentType,
 		APIBase:     apiBase,
 	}
