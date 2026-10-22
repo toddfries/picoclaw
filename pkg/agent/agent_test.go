@@ -5206,8 +5206,8 @@ func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProcessDirectWithChannel failed: %v", err)
 	}
-	if response != toolLimitResponse {
-		t.Fatalf("response = %q, want %q", response, toolLimitResponse)
+	if !strings.Contains(response, "tool_limit_test_tool") || !strings.Contains(response, "continue") {
+		t.Fatalf("response = %q, want the tool ledger and a continue grant", response)
 	}
 
 	defaultAgent := al.registry.GetDefaultAgent()
@@ -5234,8 +5234,8 @@ func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
 		t.Fatalf("history len = %d, want 4", len(history))
 	}
 	assertRoles(t, history, "user", "assistant", "tool", "assistant")
-	if history[3].Content != toolLimitResponse {
-		t.Fatalf("final assistant content = %q, want %q", history[3].Content, toolLimitResponse)
+	if !strings.Contains(history[3].Content, "tool_limit_test_tool") {
+		t.Fatalf("final assistant content = %q, want the tool ledger", history[3].Content)
 	}
 }
 

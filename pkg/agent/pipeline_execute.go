@@ -243,6 +243,7 @@ toolLoop:
 							"arg_count": len(toolArgs),
 							"iteration": iteration,
 						})
+					al.publishPicoToolStep(turnCtx, ts, iteration, toolName, toolArgs)
 
 					al.emitEvent(
 						runtimeevents.KindAgentToolExecStart,
@@ -510,6 +511,7 @@ toolLoop:
 				"arg_count": len(toolArgs),
 				"iteration": iteration,
 			})
+		al.publishPicoToolStep(turnCtx, ts, iteration, toolName, toolArgs)
 		al.emitEvent(
 			runtimeevents.KindAgentToolExecStart,
 			ts.eventMeta("runTurn", "turn.tool.start"),
