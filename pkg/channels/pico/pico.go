@@ -108,6 +108,14 @@ type PicoChannel struct {
 	deleteMessageFn    func(context.Context, string, string) error
 	// broadcastFn lets tests intercept outbound broadcasts. nil → broadcastToSession.
 	broadcastFn func(chatID string, msg PicoMessage) error
+
+	busWorkspace string
+	busSelf      string
+	// busSendFn, when set, replaces the control-socket write. Tests only.
+	busSendFn  func(PicoMessage) error
+	busMu      sync.Mutex
+	busWaiters map[string]chan PicoMessage
+	hops       map[string]*busHop
 }
 
 // NewPicoChannel creates a new Pico Protocol channel.
@@ -251,6 +259,7 @@ func (c *PicoChannel) Start(ctx context.Context) error {
 	logger.InfoC("pico", "Starting Pico Protocol channel")
 	c.ctx, c.cancel = context.WithCancel(ctx)
 	c.SetRunning(true)
+	c.bindCurrent()
 	logger.InfoC("pico", "Pico Protocol channel started")
 	return nil
 }
@@ -258,6 +267,7 @@ func (c *PicoChannel) Start(ctx context.Context) error {
 // Stop implements Channel.
 func (c *PicoChannel) Stop(ctx context.Context) error {
 	logger.InfoC("pico", "Stopping Pico Protocol channel")
+	c.unbindCurrent()
 	c.SetRunning(false)
 
 	// Close all connections
@@ -1190,6 +1200,12 @@ func (c *PicoChannel) handleMessage(pc *picoConn, msg PicoMessage) {
 	case TypeMediaSend:
 		c.handleMessageSend(pc, msg)
 
+	case TypeDirectory:
+		c.handleDirectory(msg)
+
+	case TypeBusAck, TypeBusError:
+		c.deliverBusReply(msg)
+
 	default:
 		errMsg := newError("unknown_type", fmt.Sprintf("unknown message type: %s", msg.Type))
 		pc.writeJSON(errMsg)
@@ -1245,6 +1261,8 @@ func (c *PicoChannel) handleMessageSend(pc *picoConn, msg PicoMessage) {
 	if !c.IsAllowedSender(sender) {
 		return
 	}
+
+	c.noteBusTurn(chatID, content)
 
 	inboundCtx := bus.InboundContext{
 		Channel:   "pico",

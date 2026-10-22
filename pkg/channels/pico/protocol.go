@@ -22,6 +22,14 @@ const (
 	TypeError         = "error"
 	TypePong          = "pong"
 
+	// Control plane. These never start a model turn.
+	// directory, bus.ack, and bus.error are client → server.
+	// bus.send is server → client.
+	TypeDirectory = "directory"
+	TypeBusSend   = "bus.send"
+	TypeBusAck    = "bus.ack"
+	TypeBusError  = "bus.error"
+
 	PayloadKeyContent     = "content"
 	PayloadKeyThought     = "thought"
 	PayloadKeyKind        = "kind"

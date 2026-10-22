@@ -418,20 +418,11 @@ func registerSharedTools(
 			logger.WarnCF("agent", "spawn/spawn_status tools require subagent to be enabled", nil)
 		}
 
-		// Register delegate tool for multi-agent setups.
-		// Auto-enabled when multiple agents exist. Delegation uses the SubTurn
-		// mechanism directly (not SubagentManager) and is independent of the
-		// subagent tool.
-		if len(registry.ListAgentIDs()) > 1 {
-			delegateTool := tools.NewDelegateTool()
-			delegateTool.SetSpawner(NewSubTurnSpawner(al))
-			currentAgentID := agentID
-			delegateTool.SetSelfAgentID(currentAgentID)
-			delegateTool.SetAllowlistChecker(func(targetAgentID string) bool {
-				return registry.CanSpawnSubagent(currentAgentID, targetAgentID)
-			})
-			agent.Tools.Register(delegateTool)
-		}
+		// peers and bus_send talk to other endpoints. An AGENT.md
+		// tools list does not unregister them. Delegate is not registered: a berth id
+		// is not an in-process target.
+		agent.Tools.Register(tools.NewPeersTool(agent.Workspace))
+		agent.Tools.Register(tools.NewBusSendTool(agent.Workspace))
 
 		warnOnUnknownAgentToolDeclarations(agentID, agent.Workspace, agent.Definition, agent.Tools)
 	}

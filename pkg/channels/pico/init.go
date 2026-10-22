@@ -1,6 +1,8 @@
 package pico
 
 import (
+	"path/filepath"
+
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -23,6 +25,11 @@ func init() {
 			if err != nil {
 				return nil, err
 			}
+			ws := cfg.WorkspacePath()
+			if ws == "" {
+				ws = filepath.Join(config.GetHome(), "workspace")
+			}
+			ch.SetBusWorkspace(ws)
 			if channelName != config.ChannelPico {
 				ch.SetName(channelName)
 			}
