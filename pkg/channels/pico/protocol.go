@@ -24,11 +24,12 @@ const (
 
 	// Control plane. These never start a model turn.
 	// directory, bus.ack, and bus.error are client → server.
-	// bus.send is server → client.
+	// bus.send and activity are server → client.
 	TypeDirectory = "directory"
 	TypeBusSend   = "bus.send"
 	TypeBusAck    = "bus.ack"
 	TypeBusError  = "bus.error"
+	TypeActivity  = "activity"
 
 	PayloadKeyContent     = "content"
 	PayloadKeyThought     = "thought"
@@ -49,6 +50,14 @@ type PicoMessage struct {
 	SessionID string         `json:"session_id,omitempty"`
 	Timestamp int64          `json:"timestamp,omitempty"`
 	Payload   map[string]any `json:"payload,omitempty"`
+}
+
+// activityMessage is the thinking/idle frame. state is "thinking" or "idle".
+func activityMessage(state string) (PicoMessage, bool) {
+	if state != "thinking" && state != "idle" {
+		return PicoMessage{}, false
+	}
+	return newMessage(TypeActivity, map[string]any{"state": state}), true
 }
 
 // newMessage creates a PicoMessage with the given type and payload.

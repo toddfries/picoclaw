@@ -1898,6 +1898,31 @@ func (m *Manager) GetChannel(name string) (Channel, bool) {
 	return channel, ok
 }
 
+// ActivityBroadcaster is implemented by channels that can publish a
+// thinking/idle frame without a chat message. Pico does. Others do not.
+type ActivityBroadcaster interface {
+	BroadcastActivity(state string)
+}
+
+// BroadcastActivity fans a thinking or idle state out to every channel that
+// understands it. Unknown states are ignored. The call does not log a message.
+func (m *Manager) BroadcastActivity(state string) {
+	if m == nil || (state != "thinking" && state != "idle") {
+		return
+	}
+	m.mu.RLock()
+	targets := make([]ActivityBroadcaster, 0, 1)
+	for _, ch := range m.channels {
+		if b, ok := ch.(ActivityBroadcaster); ok && b != nil {
+			targets = append(targets, b)
+		}
+	}
+	m.mu.RUnlock()
+	for _, b := range targets {
+		b.BroadcastActivity(state)
+	}
+}
+
 func (m *Manager) GetStatus() map[string]any {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

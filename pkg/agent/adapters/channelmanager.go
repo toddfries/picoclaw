@@ -44,6 +44,13 @@ func (a *channelManagerAdapter) SendPlaceholder(ctx context.Context, channel, ch
 	return a.inner.SendPlaceholder(ctx, channel, chatID)
 }
 
+func (a *channelManagerAdapter) BroadcastActivity(state string) {
+	if a == nil || a.inner == nil {
+		return
+	}
+	a.inner.BroadcastActivity(state)
+}
+
 func (a *channelManagerAdapter) DismissToolFeedback(
 	ctx context.Context, channel, chatID string, outboundCtx *bus.InboundContext,
 ) {
